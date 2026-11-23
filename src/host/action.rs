@@ -134,6 +134,13 @@ pub enum Action {
         id: u32,
         len: u32,
     },
+    /// Ask the host for the public half of a key it holds, so the engine can
+    /// send it to the device. Answered with `Completion::PublicKey`.
+    PublicKey {
+        id: u32,
+        /// Name of a key the host holds.
+        key: String,
+    },
 }
 
 impl Action {
@@ -147,7 +154,8 @@ impl Action {
             | Self::Wrap { id, .. }
             | Self::Unwrap { id, .. }
             | Self::KeyAgree { id, .. }
-            | Self::Random { id, .. } => *id,
+            | Self::Random { id, .. }
+            | Self::PublicKey { id, .. } => *id,
         }
     }
 }
@@ -207,6 +215,10 @@ impl From<PsAction> for Action {
                 id: id.get(),
                 len: u32::try_from(len).unwrap_or(u32::MAX),
             },
+            PsAction::PublicKey { id, key } => Self::PublicKey {
+                id: id.get(),
+                key: key.as_str().to_owned(),
+            },
         }
     }
 }
@@ -260,6 +272,10 @@ impl TryFrom<Action> for PsAction {
                 id: OpId::new(id),
                 len: len as usize,
             },
+            Action::PublicKey { id, key } => Self::PublicKey {
+                id: OpId::new(id),
+                key: KeyRef::new(key),
+            },
         })
     }
 }
@@ -280,6 +296,11 @@ pub enum Completion {
     Secret {
         secret: SecretBytes,
     },
+    /// The public half of a host-held key, 32 bytes. Plain bytes, not a
+    /// secret: it is meant to go on the wire to the device.
+    PublicKey {
+        bytes: Vec<u8>,
+    },
     /// The host could not perform the action. Valid for any action.
     Failed,
 }
@@ -296,6 +317,9 @@ impl From<PsCompletion> for Completion {
             PsCompletion::Secret(secret) => Self::Secret {
                 secret: secret.into(),
             },
+            PsCompletion::PublicKey(bytes) => Self::PublicKey {
+                bytes: bytes.to_vec(),
+            },
             PsCompletion::Failed => Self::Failed,
         }
     }
@@ -311,6 +335,7 @@ impl TryFrom<Completion> for PsCompletion {
             Completion::Loaded { bytes } => Self::Loaded(bytes),
             Completion::Wrapped { bytes } => Self::Wrapped(bytes),
             Completion::Secret { secret } => Self::Secret(secret.into()),
+            Completion::PublicKey { bytes } => Self::PublicKey(error::public_key(&bytes)?),
             Completion::Failed => Self::Failed,
         })
     }

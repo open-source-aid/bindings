@@ -172,6 +172,10 @@ fn every_action_round_trips_and_keeps_its_id() {
             peer_public: [7; 32],
         },
         ps::Action::Random { id, len: 16 },
+        ps::Action::PublicKey {
+            id,
+            key: ps::KeyRef::new("phone"),
+        },
     ];
     for action in actions {
         let crossed = Action::from(action);
@@ -179,6 +183,32 @@ fn every_action_round_trips_and_keeps_its_id() {
         let back = ps::Action::try_from(crossed).unwrap();
         assert_eq!(back.id(), id);
     }
+}
+
+#[test]
+fn a_host_public_key_crosses_as_plain_bytes() {
+    // It is not a Secret: the engine sends it straight to the device, so it
+    // needs neither zeroising nor a redacted Debug.
+    let completion = ps::Completion::PublicKey([9; 32]);
+    let crossed = Completion::from(completion);
+    let Completion::PublicKey { ref bytes } = crossed else {
+        panic!("expected a public key, got {crossed:?}");
+    };
+    assert_eq!(bytes.len(), 32);
+    assert!(format!("{crossed:?}").contains('9'), "{crossed:?}");
+    assert!(matches!(
+        ps::Completion::try_from(crossed),
+        Ok(ps::Completion::PublicKey(_))
+    ));
+}
+
+#[test]
+fn a_public_key_of_the_wrong_width_is_rejected() {
+    let short = Completion::PublicKey { bytes: vec![0; 8] };
+    assert!(matches!(
+        ps::Completion::try_from(short),
+        Err(BindingError::Invalid { .. })
+    ));
 }
 
 #[test]

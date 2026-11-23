@@ -46,6 +46,7 @@ impl Host {
             Action::Unwrap { .. } => "unwrap",
             Action::KeyAgree { .. } => "key-agree",
             Action::Random { .. } => "random",
+            Action::PublicKey { .. } => "public-key",
         });
         match action {
             Action::Ble { op, .. } => Completion::Ble {
@@ -78,6 +79,10 @@ impl Host {
                 },
                 _ => Completion::Failed,
             },
+            // This test host keeps no keystore of its own, so it cannot serve
+            // a host public key. No engine emits the action yet; give it a key
+            // here when the first one does.
+            Action::PublicKey { .. } => Completion::Failed,
             Action::Random { len, .. } => {
                 self.random = self.random.wrapping_add(1);
                 Completion::Secret {
