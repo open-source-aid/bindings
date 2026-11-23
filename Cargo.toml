@@ -1,0 +1,50 @@
+[package]
+name = "bindings"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "UniFFI layer that exposes the open-source-aid sans-IO device drivers to Swift and Kotlin"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/open-source-aid/bindings"
+keywords = ["insulin", "pump", "cgm", "uniffi", "ffi"]
+publish = false
+
+[lib]
+name = "osaid_bindings"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[features]
+# An app picks its drivers and its features here. Nothing device-specific is
+# on by default except the one driver that exists today (guideline 03).
+default = ["driver-ypso"]
+
+# --- drivers (one feature per linked driver) ---------------------------------
+driver-ypso = ["dep:pump-ypso"]
+
+# --- cross-cutting (guideline 03 feature table) ------------------------------
+# Commands that deliver insulin. Off by default; stop paths are never behind it.
+delivery = ["pump-ypso?/delivery"]
+# Device simulators, in process, for a Swift/Kotlin test harness. Off in app builds.
+sim = ["pump-shared/sim", "pump-ypso?/sim"]
+
+# --- protocol variants -------------------------------------------------------
+ypso-opn = ["pump-ypso?/opn"]
+
+# --- coverage ----------------------------------------------------------------
+# Code that can only run against real hardware or a real platform keystore is
+# compiled only with this feature, and the coverage gate excludes it (Q4).
+hardware = []
+
+[dependencies]
+pump-shared = { git = "https://github.com/open-source-aid/pump-shared", branch = "main" }
+pump-ypso = { git = "https://github.com/open-source-aid/pump-ypso", branch = "main", optional = true }
+thiserror = "2"
+uniffi = { version = "0.32", features = ["cli"] }
+zeroize = { version = "1", features = ["alloc"] }
+
+[dev-dependencies]
+uniffi = { version = "0.32", features = ["bindgen-tests"] }
