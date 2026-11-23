@@ -28,6 +28,8 @@
 //!   stays cheap.
 //! * [`pump`] — commands, outcomes, therapy state, limits, history.
 //! * [`registry`] — which drivers this build links.
+//! * [`session`] — validating a stored session a host was handed from
+//!   elsewhere, for drivers that cannot pair a device themselves.
 //! * [`engine`] — the engine handle.
 //! * `sim` — device simulators in process, behind the `sim` feature.
 
@@ -38,11 +40,13 @@ pub mod error;
 pub mod host;
 pub mod pump;
 pub mod registry;
+pub mod session;
 #[cfg(feature = "sim")]
 pub mod sim;
 
 pub use engine::EngineHandle;
 pub use error::BindingError;
 pub use registry::{api_version, driver_by_id, drivers, match_advertisement, DriverHandle};
+pub use session::{ypso_inspect_session, SessionBlobError, SessionSummary};
 
 uniffi::setup_scaffolding!("osaid");

@@ -46,5 +46,13 @@ thiserror = "2"
 uniffi = { version = "0.32", features = ["cli"] }
 zeroize = { version = "1", features = ["alloc"] }
 
+# Local development override. `inspect_session` (src/session.rs) is a
+# pump-ypso change that has not been pushed yet, so until it lands on that
+# repository's `main` this points the dependency at the sibling checkout.
+# Delete this section the moment it does: nothing else here depends on the
+# layout of the developer's disk.
+[patch."https://github.com/open-source-aid/pump-ypso"]
+pump-ypso = { path = "../pump-ypso" }
+
 [dev-dependencies]
 uniffi = { version = "0.32", features = ["bindgen-tests"] }

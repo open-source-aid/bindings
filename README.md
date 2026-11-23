@@ -129,6 +129,7 @@ src/
 │   └── units.rs    Bounds monomorphised per unit, and the rounding helpers
 ├── engine.rs       EngineHandle
 ├── registry.rs     drivers(), driverById(), matchAdvertisement()
+├── session.rs      ypsoInspectSession(): validating a session a host was handed
 └── sim.rs          SimDeviceHandle (feature `sim`)
 ```
 
@@ -183,20 +184,36 @@ CI builds both iOS targets, type-checks the generated Swift, and assembles an `.
 from the two static libraries plus the generated Swift as a build artifact. Kotlin is generated
 by the same binary with `--language kotlin`; an Android CI job is not written yet.
 
+## Validating a session a host was handed
+
+Some drivers cannot pair a device, and the only route to `EngineState::Paired` is a session
+blob produced elsewhere and written to `Slot::Session` by the host. Writing it needs nothing
+from this crate — the store and the keystore are the host's — but checking it first does, and a
+host must not grow a second parser for a secret format.
+
+`session.rs` is that, and only that: `ypsoInspectSession(blob)` calls `pump_ypso::inspect_session`
+and returns a `SessionSummary` (address, serial, version, keyless, credential codes) or a
+`SessionBlobError` saying which check failed. Pure — no BLE, no state, nothing written. No key,
+no password and no part of the blob is in the answer or in any error, so a host can show the
+reason to a user and log it.
+
 ## Gaps
 
 What is real: every record and enum above, both conversion directions wherever a value travels
-both ways, the registry, `EngineHandle` (all twelve methods), `SimDeviceHandle`, and the host
-loop end to end in process against `YpsoSim`.
+both ways, the registry, `EngineHandle` (all twelve methods), `SimDeviceHandle`, session
+validation, and the host loop end to end in process against `YpsoSim`.
 
 What is not:
 
 1. **CGM.** `cgmDrivers()` returns an empty list; `newCgmEngine()` returns
    `BindingError.notImplemented`. Needs `CgmEngineHandle`, and ideally Q5 settled first.
-2. **A paired session in the Swift harness.** The simulator answers BLE, but bringing an engine
-   to `Paired` needs the driver's own stored session blob, whose encoding is driver-private.
-   Seeding it from here would put device knowledge in this repo. It belongs in `tester`, or in
-   a seeding entry point the driver itself exposes.
+2. **Minting a pairing.** Closed on the host's side, open on the device's. A host that is
+   *handed* a session can now use it: `ypsoInspectSession` validates the blob (`session.rs`,
+   the driver's own parser — this crate does not parse it), and the host wraps it and writes
+   `Slot::Session` itself, after which a fresh engine loads it and reports `Paired`. There is
+   still no *encoder* here and there should not be: whoever can mint a pairing holds the
+   device's server key, and `pump-ypso/.docs/pairing.md` lists what `Command::Pair` would need
+   before it could be declared.
 3. **`Unrecognized` arms.** Every data enum has one, because the shared enums are
    `#[non_exhaustive]`: a driver newer than these bindings reports a variant, and the host sees
    `Unrecognized` with a debug string rather than a crash. Handing one back to an engine is an
