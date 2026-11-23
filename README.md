@@ -86,6 +86,13 @@ monomorphised per unit; newtypes become their raw integers; `Secret` crosses as 
 no conversion beyond repacking. The exported helpers call straight into `pump-shared` so Kotlin
 and Swift cannot answer the same question differently.
 
+`DriverInfo.nominal` crosses as its own records — `Nominal`, `NominalLimits`,
+`NominalCapabilities`, `NominalBounds*` — which carry what a device *family* is built for and are
+readable before any device is connected, for a setup screen. They are not `Limits`/`Bounds*`,
+nothing converts between the two, and only `Bounds*` has `_allows`, `_floor` and `_nearest`: a
+family ceiling or a family step is never what a real dose is checked or rounded against. A
+`Nominal*` record enumerates (`nominalInsulinValues(_:)` and friends), and nothing else.
+
 A CGM driver registers the same way a pump does: a feature and a line in `DRIVERS`.
 
 ## Building

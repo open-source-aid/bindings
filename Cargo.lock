@@ -479,7 +479,6 @@ dependencies = [
 [[package]]
 name = "pump-shared"
 version = "0.1.0"
-source = "git+https://github.com/open-source-aid/pump-shared?branch=main#b60dcf3635d38b34dc3e2292241a3b5e48986f75"
 dependencies = [
  "zeroize",
 ]
@@ -487,7 +486,6 @@ dependencies = [
 [[package]]
 name = "pump-ypso"
 version = "0.1.0"
-source = "git+https://github.com/open-source-aid/pump-ypso?branch=main#b0ce269b7c9651bf90b159c5bf2ea3ce59143c9e"
 dependencies = [
  "chacha20",
  "chacha20poly1305",

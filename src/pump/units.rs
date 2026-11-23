@@ -13,10 +13,11 @@
 
 use core::time::Duration;
 
-use pump_shared::{BasalProfile, BasalSegment as PsBasalSegment, ProfileError};
 use pump_shared::{
-    BasalRate, Bounds, InsulinAmount, Percent, TempBasalRate as PsTempBasalRate, Tier,
+    grid, BasalRate, Bounds, InsulinAmount, NominalBounds, Percent,
+    TempBasalRate as PsTempBasalRate, Tier,
 };
+use pump_shared::{BasalProfile, BasalSegment as PsBasalSegment, ProfileError};
 
 use crate::error::BindingError;
 
@@ -226,4 +227,110 @@ bounds!(
     bounds_duration_floor,
     bounds_duration_nearest,
     bounds_duration_values,
+);
+
+/// `NominalBounds<T>`, monomorphised per unit — the same tier table as
+/// `Bounds*`, and deliberately a different type.
+///
+/// A `Nominal*` record says what a device **family** is built for, read from
+/// `DriverInfo` before any device is connected, so a setup screen has
+/// something to offer. A `Bounds*` record says what the device in hand
+/// accepts, read from `DeviceInfo` after a connect.
+///
+/// They do not convert, in either direction, and only `Bounds*` has
+/// `_allows`, `_floor` and `_nearest`. Checking or rounding a real dose
+/// against a family figure would build a command the device refuses — its
+/// bolus step and its maximum bolus are settings on the pump, not family
+/// facts — so the ABI does not offer the call at all. A `Nominal*` record
+/// enumerates, and nothing else.
+macro_rules! nominal_bounds {
+    (
+        $nominal:ident, $tier:ident, $raw:ty, $quantity:ty,
+        $to:expr, $from:expr, $values:ident $(,)?
+    ) => {
+        #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+        pub struct $nominal {
+            pub min: $raw,
+            pub max: $raw,
+            pub tiers: Vec<$tier>,
+        }
+
+        impl $nominal {
+            #[allow(clippy::redundant_closure_call)]
+            pub fn from_shared(bounds: &NominalBounds<$quantity>) -> Self {
+                Self {
+                    min: $to(bounds.min),
+                    max: $to(bounds.max),
+                    tiers: bounds
+                        .tiers
+                        .iter()
+                        .map(|tier| $tier {
+                            from: $to(tier.from),
+                            step: $to(tier.step),
+                        })
+                        .collect(),
+                }
+            }
+        }
+
+        /// Every value on the family grid, in order. For a setup picker —
+        /// never for validating or rounding a dose.
+        #[uniffi::export]
+        pub fn $values(bounds: &$nominal) -> Vec<$raw> {
+            #[allow(clippy::redundant_closure_call)]
+            let tiers: Vec<Tier<$quantity>> = bounds
+                .tiers
+                .iter()
+                .map(|tier| Tier {
+                    from: $from(tier.from),
+                    step: $from(tier.step),
+                })
+                .collect();
+            #[allow(clippy::redundant_closure_call)]
+            grid($from(bounds.min), $from(bounds.max), &tiers)
+                .into_iter()
+                .map($to)
+                .collect()
+        }
+    };
+}
+
+nominal_bounds!(
+    NominalBoundsInsulin,
+    TierInsulin,
+    u32,
+    InsulinAmount,
+    |value: InsulinAmount| value.milliunits(),
+    InsulinAmount::from_milliunits,
+    nominal_insulin_values,
+);
+
+nominal_bounds!(
+    NominalBoundsBasalRate,
+    TierBasalRate,
+    u32,
+    BasalRate,
+    |value: BasalRate| value.milliunits_per_hour(),
+    BasalRate::from_milliunits_per_hour,
+    nominal_basal_rate_values,
+);
+
+nominal_bounds!(
+    NominalBoundsPercent,
+    TierPercent,
+    u16,
+    Percent,
+    |value: Percent| value.get(),
+    Percent::new,
+    nominal_percent_values,
+);
+
+nominal_bounds!(
+    NominalBoundsDuration,
+    TierDuration,
+    u64,
+    Duration,
+    |value: Duration| value.as_secs(),
+    Duration::from_secs,
+    nominal_duration_values,
 );

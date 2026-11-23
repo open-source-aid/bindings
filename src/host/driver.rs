@@ -16,6 +16,7 @@ use pump_shared::{Advertisement as PsAdvertisement, BleMatch as PsBleMatch, Conf
 use crate::error::BindingError;
 use crate::host::ble::NotifyKind;
 use crate::pump::command::CommandKind;
+use crate::pump::status::Nominal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum Kind {
@@ -78,6 +79,10 @@ impl From<&PsGattChar> for GattChar {
 pub struct Variant {
     pub id: String,
     pub name: String,
+    /// What this model is built for, when it differs from the family's
+    /// `DriverInfo.nominal`. `None` means "as the family", not "unknown";
+    /// [`driver_nominal_for`] resolves the two.
+    pub nominal: Option<Nominal>,
 }
 
 impl From<&PsVariant> for Variant {
@@ -85,6 +90,7 @@ impl From<&PsVariant> for Variant {
         Self {
             id: variant.id.to_owned(),
             name: variant.name.to_owned(),
+            nominal: variant.nominal.map(Nominal::from),
         }
     }
 }
@@ -130,6 +136,11 @@ pub struct DriverInfo {
     pub commands: Vec<CommandKind>,
     pub features: Vec<Feature>,
     pub slots: Vec<SlotDeclaration>,
+    /// What the device family is built for, before any device is connected:
+    /// what to draw a setup screen from. **Not** what a connected device
+    /// accepts — that is `DeviceInfo.limits`, and it is the only thing a dose
+    /// may be checked against.
+    pub nominal: Nominal,
     /// `api_version` matches this build of the shared contract.
     pub compatible: bool,
 }
@@ -156,9 +167,20 @@ impl From<&'static PsDriverInfo> for DriverInfo {
                     class: (*class).into(),
                 })
                 .collect(),
+            nominal: Nominal::from(&info.nominal),
             compatible: info.is_compatible(),
         }
     }
+}
+
+/// The nominal declaration that applies to `variant`: the model's own when it
+/// has one, the driver's otherwise.
+#[uniffi::export]
+pub fn driver_nominal_for(info: &DriverInfo, variant: &Variant) -> Nominal {
+    variant
+        .nominal
+        .clone()
+        .unwrap_or_else(|| info.nominal.clone())
 }
 
 /// One scan result, as the platform saw it.

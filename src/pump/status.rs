@@ -2,13 +2,17 @@
 
 use pump_shared::{
     Basal as PsBasal, Bolus as PsBolus, Capabilities as PsCapabilities, DeviceInfo as PsDeviceInfo,
-    Extended as PsExtended, Limits as PsLimits, PumpMode as PsPumpMode, PumpStatus as PsPumpStatus,
-    TherapyState as PsTherapyState,
+    Extended as PsExtended, Limits as PsLimits, Nominal as PsNominal,
+    NominalCapabilities as PsNominalCapabilities, NominalLimits as PsNominalLimits,
+    PumpMode as PsPumpMode, PumpStatus as PsPumpStatus, TherapyState as PsTherapyState,
 };
 
 use crate::pump::history::Alarm;
 use crate::pump::units::TempBasalRate;
 use crate::pump::units::{BoundsBasalRate, BoundsDuration, BoundsInsulin, BoundsPercent};
+use crate::pump::units::{
+    NominalBoundsBasalRate, NominalBoundsDuration, NominalBoundsInsulin, NominalBoundsPercent,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum PumpMode {
@@ -267,4 +271,102 @@ pub fn limits_allow_extended_bolus(limits: &Limits, milliunits: u32, seconds: u6
         pump_shared::InsulinAmount::from_milliunits(milliunits),
         core::time::Duration::from_secs(seconds),
     )
+}
+
+/// What a device **family** is built for, declared by the driver at compile
+/// time and readable before any device is connected — the figures a setup
+/// screen needs.
+///
+/// Not [`Limits`]: see [`NominalLimits`] for what that distinction costs if
+/// it is ignored.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NominalLimits {
+    /// Bolus amounts. `max` is the family ceiling; the user's own maximum
+    /// bolus lives on the device and is lower.
+    pub bolus: Option<NominalBoundsInsulin>,
+    pub basal: Option<NominalBoundsBasalRate>,
+    pub temp_basal_percent: Option<NominalBoundsPercent>,
+    pub temp_basal_absolute: Option<NominalBoundsBasalRate>,
+    pub temp_basal_duration: Option<NominalBoundsDuration>,
+    pub extended_bolus_duration: Option<NominalBoundsDuration>,
+}
+
+impl NominalLimits {
+    pub fn from_shared(limits: &PsNominalLimits) -> Self {
+        Self {
+            bolus: limits.bolus.as_ref().map(NominalBoundsInsulin::from_shared),
+            basal: limits
+                .basal
+                .as_ref()
+                .map(NominalBoundsBasalRate::from_shared),
+            temp_basal_percent: limits
+                .temp_basal_percent
+                .as_ref()
+                .map(NominalBoundsPercent::from_shared),
+            temp_basal_absolute: limits
+                .temp_basal_absolute
+                .as_ref()
+                .map(NominalBoundsBasalRate::from_shared),
+            temp_basal_duration: limits
+                .temp_basal_duration
+                .as_ref()
+                .map(NominalBoundsDuration::from_shared),
+            extended_bolus_duration: limits
+                .extended_bolus_duration
+                .as_ref()
+                .map(NominalBoundsDuration::from_shared),
+        }
+    }
+}
+
+/// The family counterpart of [`Capabilities`]. A measurement the driver
+/// cannot evidence is `None`; the three flags are facts about the family.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NominalCapabilities {
+    /// A full cartridge, not a fill level.
+    pub reservoir_capacity_milliunits: Option<u32>,
+    pub max_profile_segments: Option<u8>,
+    pub min_segment_seconds: Option<u64>,
+    pub history: bool,
+    pub daily_totals: bool,
+    pub patch: bool,
+}
+
+impl NominalCapabilities {
+    pub fn from_shared(capabilities: &PsNominalCapabilities) -> Self {
+        Self {
+            reservoir_capacity_milliunits: capabilities
+                .reservoir_capacity
+                .map(|amount| amount.milliunits()),
+            max_profile_segments: capabilities.max_profile_segments,
+            min_segment_seconds: capabilities
+                .min_segment_duration
+                .map(|duration| duration.as_secs()),
+            history: capabilities.history,
+            daily_totals: capabilities.daily_totals,
+            patch: capabilities.patch,
+        }
+    }
+}
+
+/// Everything a driver says about its family before a device exists, carried
+/// on `DriverInfo.nominal` and, per model, on `Variant.nominal`.
+///
+/// **Nominal is not actual.** A pump is narrower than its family, and only
+/// the pump can say by how much, in [`DeviceInfo`]. Draw a picker from this;
+/// round and validate a dose with [`Limits`] from the device, or do not round
+/// at all.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Nominal {
+    pub limits: NominalLimits,
+    pub capabilities: NominalCapabilities,
+}
+
+impl From<&PsNominal> for Nominal {
+    fn from(nominal: &PsNominal) -> Self {
+        Self {
+            limits: NominalLimits::from_shared(&nominal.limits),
+            capabilities: NominalCapabilities::from_shared(&nominal.capabilities),
+        }
+    }
 }

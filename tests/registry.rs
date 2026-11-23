@@ -1,7 +1,7 @@
 //! What a host sees before it talks to any device.
 
 use osaid_bindings::error::BindingError;
-use osaid_bindings::host::driver::{Advertisement, Config, Kind};
+use osaid_bindings::host::driver::{driver_nominal_for, Advertisement, Config, Kind};
 use osaid_bindings::registry::{
     api_version, cgm_drivers, driver_by_id, drivers, match_advertisement, new_cgm_engine,
 };
@@ -108,4 +108,45 @@ fn cgm_support_is_an_honest_stub() {
     assert!(cgm_drivers().is_empty());
     let engine = new_cgm_engine("dexcom".to_owned(), "g7".to_owned(), Config::default());
     assert!(matches!(engine, Err(BindingError::NotImplemented { .. })));
+}
+
+#[cfg(feature = "driver-ypso")]
+#[test]
+fn a_setup_screen_can_be_drawn_before_any_pump_is_connected() {
+    use osaid_bindings::pump::units::{nominal_duration_values, nominal_insulin_values};
+
+    let driver = driver_by_id("ypso".to_owned()).expect("ypso is linked");
+    let info = driver.info();
+
+    // This is the whole point: no device, no connect, and still a grid.
+    let bolus = info
+        .nominal
+        .limits
+        .bolus
+        .clone()
+        .expect("the YpsoPump family declares its bolus grid");
+    let volumes = nominal_insulin_values(&bolus);
+    assert_eq!(volumes.first(), Some(&100));
+    assert_eq!(volumes.last(), Some(&25_000));
+    assert_eq!(
+        info.nominal.capabilities.reservoir_capacity_milliunits,
+        Some(160_000)
+    );
+    assert_eq!(info.nominal.capabilities.max_profile_segments, Some(24));
+
+    // The pump has no absolute temp basal, and says so rather than guessing.
+    assert_eq!(info.nominal.limits.temp_basal_absolute, None);
+    let extended = info
+        .nominal
+        .limits
+        .extended_bolus_duration
+        .clone()
+        .expect("the family has a native extended bolus");
+    assert_eq!(nominal_duration_values(&extended).last(), Some(&43_200));
+
+    // Every model of this family shares the declaration.
+    for variant in &info.variants {
+        assert_eq!(variant.nominal, None);
+        assert_eq!(driver_nominal_for(&info, variant), info.nominal);
+    }
 }

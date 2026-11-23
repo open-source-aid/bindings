@@ -16,8 +16,13 @@ use osaid_bindings::pump::history::{
     history_sync_id, Alarm, AlarmKind, HistoryEntry, HistoryEvent,
 };
 use osaid_bindings::pump::outcome::{Failure, Outcome, Refusal, Report};
-use osaid_bindings::pump::status::{Basal, Bolus, Extended, PumpMode, PumpStatus, TherapyState};
+use osaid_bindings::pump::status::{
+    Basal, Bolus, Extended, Nominal, NominalCapabilities, NominalLimits, PumpMode, PumpStatus,
+    TherapyState,
+};
 use osaid_bindings::pump::units::*;
+
+use core::time::Duration;
 
 use pump_shared as ps;
 
@@ -763,4 +768,122 @@ fn device_info_reaches_the_host_as_an_event() {
         Event::DeviceInfo { info } => assert_eq!(info.serial, "10155555"),
         other => panic!("expected device info, got {other:?}"),
     }
+}
+
+const INSULIN_TIERS: &[ps::Tier<ps::InsulinAmount>] = &[ps::Tier {
+    from: ps::InsulinAmount::ZERO,
+    step: ps::InsulinAmount::from_milliunits(50),
+}];
+const RATE_TIERS: &[ps::Tier<ps::BasalRate>] = &[ps::Tier {
+    from: ps::BasalRate::from_milliunits_per_hour(0),
+    step: ps::BasalRate::from_milliunits_per_hour(10),
+}];
+const PERCENT_TIERS: &[ps::Tier<ps::Percent>] = &[ps::Tier {
+    from: ps::Percent::new(0),
+    step: ps::Percent::new(10),
+}];
+const QUARTER_TIERS: &[ps::Tier<Duration>] = &[ps::Tier {
+    from: Duration::ZERO,
+    step: Duration::from_secs(900),
+}];
+
+#[test]
+fn nominal_bounds_cross_as_their_own_records_and_only_enumerate() {
+    let family = ps::Nominal {
+        limits: ps::NominalLimits {
+            bolus: Some(ps::NominalBounds {
+                min: ps::InsulinAmount::from_milliunits(100),
+                max: ps::InsulinAmount::from_milliunits(500),
+                tiers: INSULIN_TIERS,
+            }),
+            basal: Some(ps::NominalBounds {
+                min: ps::BasalRate::from_milliunits_per_hour(20),
+                max: ps::BasalRate::from_milliunits_per_hour(100),
+                tiers: RATE_TIERS,
+            }),
+            temp_basal_percent: Some(ps::NominalBounds {
+                min: ps::Percent::new(0),
+                max: ps::Percent::new(200),
+                tiers: PERCENT_TIERS,
+            }),
+            temp_basal_absolute: None,
+            temp_basal_duration: Some(ps::NominalBounds {
+                min: Duration::from_secs(900),
+                max: Duration::from_secs(3600),
+                tiers: QUARTER_TIERS,
+            }),
+            extended_bolus_duration: None,
+        },
+        capabilities: ps::NominalCapabilities {
+            reservoir_capacity: Some(ps::InsulinAmount::from_milliunits(160_000)),
+            max_profile_segments: Some(24),
+            min_segment_duration: Some(Duration::from_secs(3600)),
+            history: true,
+            daily_totals: false,
+            patch: false,
+        },
+    };
+
+    let crossed = Nominal::from(&family);
+    let bolus = crossed.limits.bolus.clone().expect("a bolus grid");
+    assert_eq!(bolus.min, 100);
+    assert_eq!(bolus.max, 500);
+    assert_eq!(
+        nominal_insulin_values(&bolus),
+        [100, 150, 200, 250, 300, 350, 400, 450, 500]
+    );
+
+    let basal = crossed.limits.basal.clone().expect("a basal grid");
+    assert_eq!(nominal_basal_rate_values(&basal).len(), 9);
+    let percent = crossed
+        .limits
+        .temp_basal_percent
+        .clone()
+        .expect("a percent grid");
+    assert_eq!(nominal_percent_values(&percent).len(), 21);
+    let duration = crossed
+        .limits
+        .temp_basal_duration
+        .clone()
+        .expect("a duration grid");
+    assert_eq!(nominal_duration_values(&duration), [900, 1800, 2700, 3600]);
+    assert_eq!(crossed.limits.temp_basal_absolute, None);
+    assert_eq!(crossed.limits.extended_bolus_duration, None);
+
+    assert_eq!(
+        crossed.capabilities.reservoir_capacity_milliunits,
+        Some(160_000)
+    );
+    assert_eq!(crossed.capabilities.max_profile_segments, Some(24));
+    assert_eq!(crossed.capabilities.min_segment_seconds, Some(3600));
+    assert!(crossed.capabilities.history);
+    assert!(!crossed.capabilities.daily_totals);
+    assert!(!crossed.capabilities.patch);
+    assert!(format!("{crossed:?}").contains("Nominal"));
+}
+
+#[test]
+fn a_family_that_evidences_nothing_crosses_as_nothing() {
+    let crossed = Nominal::from(&ps::Nominal::default());
+    assert_eq!(
+        crossed,
+        Nominal {
+            limits: NominalLimits {
+                bolus: None,
+                basal: None,
+                temp_basal_percent: None,
+                temp_basal_absolute: None,
+                temp_basal_duration: None,
+                extended_bolus_duration: None,
+            },
+            capabilities: NominalCapabilities {
+                reservoir_capacity_milliunits: None,
+                max_profile_segments: None,
+                min_segment_seconds: None,
+                history: false,
+                daily_totals: false,
+                patch: false,
+            },
+        }
+    );
 }
