@@ -48,12 +48,3 @@ zeroize = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]
 uniffi = { version = "0.32", features = ["bindgen-tests"] }
-
-# TEMPORARY: unpushed `pump-shared` (API_VERSION 3, `DriverInfo::nominal`) and
-# the `pump-ypso` declaration that goes with it.
-# Delete both sections once those changes land on `main` upstream.
-[patch."https://github.com/open-source-aid/pump-shared"]
-pump-shared = { path = "../pump-shared" }
-
-[patch."https://github.com/open-source-aid/pump-ypso"]
-pump-ypso = { path = "../pump-ypso" }
