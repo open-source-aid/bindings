@@ -487,6 +487,7 @@ dependencies = [
 [[package]]
 name = "pump-ypso"
 version = "0.1.0"
+source = "git+https://github.com/open-source-aid/pump-ypso?branch=main#b0ce269b7c9651bf90b159c5bf2ea3ce59143c9e"
 dependencies = [
  "chacha20",
  "chacha20poly1305",
