@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use pump_shared::Driver;
+use pump_shared::{Address, Driver};
 
 use crate::engine::EngineHandle;
 use crate::error::BindingError;
@@ -66,12 +66,17 @@ impl DriverHandle {
         self.driver.info().id.to_owned()
     }
 
-    /// The model this advertisement is, or `nil` when it is not this driver's
-    /// device.
-    pub fn matches(&self, advertisement: Advertisement) -> Option<Variant> {
+    /// What this advertisement is, or `nil` when it is not this driver's
+    /// device. Carries the address the driver derives from it; see
+    /// [`DriverMatch`].
+    pub fn matches(&self, advertisement: Advertisement) -> Option<DriverMatch> {
         advertisement
             .with(|advertisement| self.driver.matches(advertisement))
-            .map(Into::into)
+            .map(|matched| DriverMatch {
+                driver_id: matched.driver_id.to_owned(),
+                variant: matched.variant.into(),
+                address: matched.address,
+            })
     }
 
     /// A fresh engine for one device. The caller owns it and MUST drive it
@@ -96,11 +101,20 @@ impl DriverHandle {
     }
 }
 
-/// Which driver an advertisement belongs to, and which model it is.
+/// Which driver an advertisement belongs to, which model it is, and the
+/// device address the driver derives from the advertisement.
+///
+/// `address` is what lets a host bind a scanned peripheral to a pairing it
+/// already holds. On a platform that hides the hardware MAC — iOS does — it is
+/// the only way: the driver reads the identity out of the advertisement, and
+/// the host compares addresses without knowing how either was built. `None`
+/// when the driver derives nothing, and the host falls back to the
+/// advertisement's own address.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DriverMatch {
     pub driver_id: String,
     pub variant: Variant,
+    pub address: Option<Address>,
 }
 
 /// Every driver linked into this build.
@@ -127,9 +141,10 @@ pub fn match_advertisement(advertisement: Advertisement) -> Vec<DriverMatch> {
         DRIVERS
             .iter()
             .filter_map(|driver| {
-                driver.matches(advertisement).map(|variant| DriverMatch {
-                    driver_id: driver.info().id.to_owned(),
-                    variant: variant.into(),
+                driver.matches(advertisement).map(|matched| DriverMatch {
+                    driver_id: matched.driver_id.to_owned(),
+                    variant: matched.variant.into(),
+                    address: matched.address,
                 })
             })
             .collect()
