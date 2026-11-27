@@ -1,22 +1,24 @@
 # bindings
 
 The FFI layer that exposes the open-source-aid sans-IO device drivers to Swift and Kotlin, built
-with [UniFFI](https://github.com/mozilla/uniffi-rs). One Rust library, statically linked, carrying
-every driver the app ships.
+with [UniFFI](https://github.com/mozilla/uniffi-rs). It is a single Rust library, statically
+linked into the app, carrying whichever drivers that app selects at build time.
 
-This is the **Bindings** piece of [guideline 13](https://github.com/open-source-aid/guidelines/blob/main/13-app-integration.md).
-The host runtime and the app adapter live elsewhere.
-
-Status: skeleton. Builds, tested, generated Swift compiles, host loop runs in process against the
-driver's own simulator. See [Gaps](#gaps).
+Its job is narrow on purpose: it **repacks** the driver types so they can cross an FFI boundary,
+and does nothing else. No protocol, no retry or reconnect policy, no unit conversion beyond
+moving bytes and integers from one side to the other. Every answer it exposes calls straight into
+the shared driver crates, so Swift and Kotlin can never answer the same question two different
+ways. This is the Bindings piece of the app-integration guideline; the host runtime and the
+per-app adapter live in other repositories.
 
 ## One serial executor per engine
 
-**An engine is not `Sync` and MUST NOT be called concurrently.** One `EngineHandle`, one serial
-queue, for its whole life:
+This is the single rule a host must get right. **An engine is not thread-safe and must never be
+called concurrently.** Give each engine one serial queue for its whole life, and drive it from
+that queue only:
 
 ```swift
-let queue = DispatchQueue(label: "pump.\(serial)")
+let queue = DispatchQueue(label: "device.\(serial)")
 
 queue.async {
     while let event = engine.pollEvent() { adapter.on(event) }
@@ -26,29 +28,32 @@ queue.async {
 }
 ```
 
-`EngineHandle` holds a mutex because a UniFFI object is shared as `Arc<T>`. That makes a
-concurrent call *safe*, not *correct*: a second queue interleaving `submit` and `pollAction`
-breaks rule E1 and the engine reports `CompletionError`. Seat belt, not permission.
+An engine handle holds a mutex, because UniFFI shares it as a reference-counted object. That makes
+a concurrent call *memory-safe*, not *correct*: a second queue interleaving calls corrupts the
+engine's view of what it asked for, and it rejects the completion. Treat the mutex as a seat belt,
+not as permission to call from two places.
 
-## Features
+## Choosing drivers and features
 
-```toml
-bindings = { git = "https://github.com/open-source-aid/bindings", branch = "main",
-             default-features = false, features = ["driver-ypso", "delivery"] }
-```
+An app enables one Cargo feature per driver it links, plus a few cross-cutting switches. Today a
+single driver ships — the YpsoPump — so the table is short; more drivers appear here as one feature
+each, and a CGM driver registers exactly the same way a pump does.
 
 | Feature | Default | Meaning |
 |---|---|---|
-| `driver-ypso` | on | Link the YpsoPump driver. One per driver. |
-| `delivery` | **off** | Commands that deliver insulin. Stop paths are never behind it. |
-| `sim` | **off** | Device simulators. MUST be off in app builds. |
-| `ypso-opn` | off | YpsoPump without CryptoService. |
-| `hardware` | off | Reserved for the coverage-gate exclusion (Q4). Empty today. |
+| `driver-ypso` | on | Link the one pump driver available today. One feature per driver. |
+| `delivery` | **off** | Enables the commands that deliver insulin. Commands that *stop* delivery are never behind this switch. |
+| `sim` | **off** | In-process device simulators for a test harness. Must stay off in app builds. |
+| `hardware` | off | Reserved for code that only runs against real hardware; excluded from the coverage gate. |
 
-What was compiled in is visible at run time: `info.features`, `info.commands`, `info.gatt`,
-`info.slots`, `info.compatible`.
+What was compiled in is readable at run time through `info.features`, `info.commands`,
+`info.gatt`, `info.slots` and `info.compatible` — a host never has to guess which drivers or
+capabilities a given build carries.
 
-## From Swift
+## Using it from Swift
+
+The flow is the same whatever the device: match an advertisement, open the matching driver, create
+an engine, submit commands.
 
 ```swift
 let found = matchAdvertisement(advertisement: advertisement)
@@ -58,42 +63,38 @@ let engine = try driver.newEngine(variantId: match.variant.id,
 let id = try engine.submit(command: .bolus(milliunits: 2_500))
 ```
 
-Rounding stays in Rust so both platforms round identically: `boundsInsulinFloor` (Loop, Trio),
-`boundsInsulinNearest` (AAPS). The ABI carries milliunits, milliunits per hour, whole percent and
-whole seconds — never a float. Unit conversion is the adapter's job, at the edge.
+Nothing here panics on a value from the host: anything that cannot cross comes back as a typed
+error.
 
-With `sim` on, `ypsoSimulator(key:password:)` answers `BleOp` in process — the driver's own
-simulator, not a second implementation.
+## Units stay integers, rounding stays in Rust
+
+The boundary carries only whole integers — milliunits, milliunits per hour, whole percent, whole
+seconds — never a floating-point number. Rounding to what a device actually accepts happens in
+Rust, so both platforms round identically (`boundsInsulinFloor` for Loop and Trio,
+`boundsInsulinNearest` for AndroidAPS). Converting those integers into display units is the app
+adapter's job, at the very edge.
+
+A driver also exposes a *nominal* description of the device family — what the hardware is built
+for, readable before any device is connected, for a setup screen. These nominal records are
+deliberately separate from the live limits a real dose is checked and rounded against, and nothing
+converts between the two: a family ceiling is never mistaken for a live bound.
 
 ## Layout
 
 ```
 src/
-├── error.rs        BindingError: the one error that crosses
-├── host/           the generic half (follows `device-shared` when Q5 lands)
-│   action.rs  ble.rs  driver.rs  secret.rs
-├── pump/           the pump half
-│   command.rs  event.rs  history.rs  outcome.rs  status.rs  units.rs
-├── engine.rs       EngineHandle
+├── error.rs        the one error type that crosses the boundary
+├── host/           the generic half: actions, BLE ops, driver registry, secrets
+├── pump/           the pump half: commands, events, history, outcomes, status, units
+├── engine.rs       the engine handle
 ├── registry.rs     drivers(), driverById(), matchAdvertisement()
-├── session.rs      ypsoInspectSession(): validate a session the host was handed
-└── sim.rs          SimDeviceHandle (feature `sim`)
+├── session.rs      validate a pairing session the host was handed
+└── sim.rs          in-process simulator handle (feature `sim`)
 ```
 
-Handles replace what cannot cross (`&'static DriverInfo`, `Box<dyn Engine>`); `Bounds<T>` is
-monomorphised per unit; newtypes become their raw integers; `Secret` crosses as bytes and stays
-`Zeroizing` on the Rust side. **No logic is added** — no protocol, no retry or reconnect policy,
-no conversion beyond repacking. The exported helpers call straight into `pump-shared` so Kotlin
-and Swift cannot answer the same question differently.
-
-`DriverInfo.nominal` crosses as its own records — `Nominal`, `NominalLimits`,
-`NominalCapabilities`, `NominalBounds*` — which carry what a device *family* is built for and are
-readable before any device is connected, for a setup screen. They are not `Limits`/`Bounds*`,
-nothing converts between the two, and only `Bounds*` has `_allows`, `_floor` and `_nearest`: a
-family ceiling or a family step is never what a real dose is checked or rounded against. A
-`Nominal*` record enumerates (`nominalInsulinValues(_:)` and friends), and nothing else.
-
-A CGM driver registers the same way a pump does: a feature and a line in `DRIVERS`.
+Handles stand in for anything that cannot physically cross the boundary; secrets cross as bytes and
+are zeroized on the Rust side; typed enums are marked non-exhaustive so a newer driver can report a
+value an older host sees as "unrecognized" rather than crashing.
 
 ## Building
 
@@ -108,32 +109,21 @@ cargo run --bin uniffi-bindgen -- generate \
 ```
 
 CI builds both iOS targets, type-checks the generated Swift and assembles an `.xcframework`.
-Kotlin generates with `--language kotlin`; no Android CI job yet.
+Kotlin generates with `--language kotlin`; there is no Android CI job yet.
 
-## Gaps
+## Status
 
-1. **CGM.** `cgmDrivers()` is empty, `newCgmEngine()` returns `NotImplemented`. Needs a
-   `CgmEngineHandle`, ideally after Q5.
-2. **Minting a pairing.** A host that is *handed* a session can use it: `ypsoInspectSession`
-   validates the blob with the driver's own parser, then the host wraps it and writes
-   `Slot::Session` itself. There is no encoder here and should not be — whoever can mint a
-   pairing holds the device's server key. See `pump-ypso/.docs/pairing.md`.
-3. **`Unrecognized` arms.** Every data enum has one, because the shared enums are
-   `#[non_exhaustive]`: a newer driver reports a variant the host sees as `Unrecognized` rather
-   than a crash. Unreachable today, which is what the coverage gate trips over.
-4. **Kotlin.** Generates, but no CI job and no test harness.
-5. **Q1 `provide_input`, Q13 non-BLE transports, Q9 device settings** — not in the contract yet.
+A working skeleton: it builds, it is tested, the generated Swift compiles, and the host loop runs
+in process against a driver's own simulator. Known gaps:
 
-Nothing here panics on a value from the host; anything that cannot cross is a typed
-`BindingError`.
-
-**Coverage** is at 95 % against the org's 100 % gate (Q4). The uncovered lines are almost all the
-`Unrecognized` arms above. CI publishes the number and runs the gate with `continue-on-error`, so
-the gap is visible rather than hidden; the group needs to settle how an unreachable arm is
-excluded (`coverage(off)` is the usual answer).
+- **CGM support** is stubbed — the registry is pump-only for now.
+- **Pairing** can be *used* here but not *minted*: a host that is handed a session can have it
+  validated, but creating a new pairing stays with whoever holds the device's keys, by design.
+- **Kotlin** generates but has no CI job or test harness yet.
+- **Coverage** sits a little under the org's 100 % gate; the uncovered lines are almost all the
+  unreachable "unrecognized" arms, and CI reports the number rather than hiding it.
 
 ## Licence
 
-AGPL-3.0-or-later. See `LICENSE` and `NOTICE.md`. Whether an app may link this and ship it through
-an app store is [Q8](https://github.com/open-source-aid/guidelines/blob/main/14-open-questions.md),
-unsettled.
+AGPL-3.0-or-later. See `LICENSE` and `NOTICE.md`. Whether an app may link this library and ship it
+through an app store is an open licensing question, not yet settled.
